@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-requests
+cloudscraper
 beautifulsoup4
 pandas
 openpyxl
