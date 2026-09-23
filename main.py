@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import pandas as pd
 import io
@@ -19,25 +19,26 @@ app.add_middleware(
 @app.get("/extrair")
 def extrair_cardapio(url: str):
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        # Cria um scraper disfarçado para contornar bloqueios (ex: Cloudflare)
+        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
         
-        resposta = requests.get(url, headers=headers, timeout=30)
+        resposta = scraper.get(url, timeout=30)
         soup = BeautifulSoup(resposta.text, 'html.parser')
         
-        # Extrai textos que pareçam títulos de produtos
-        titulos = soup.find_all(['h2', 'h3', 'h4'])
+        # Procura os nomes dos produtos (h2, h3, h4)
+        titulos = soup.find_all(['h2', 'h3', 'h4', 'span', 'p']) # Adicionado span e p para apanhar mais formatos
         nomes_produtos = []
+        
         for titulo in titulos:
             texto = titulo.get_text(strip=True)
-            if texto and len(texto) > 3:  # Ignora textos muito curtos
+            # Filtra para evitar textos vazios ou mensagens de erro curtas
+            if texto and len(texto) > 3 and "blocked" not in texto.lower() and "access" not in texto.lower():
                 nomes_produtos.append(texto)
 
-        # Remove duplicados mantendo a ordem
+        # Remove duplicados mantendo a ordem original
         nomes_produtos = list(dict.fromkeys(nomes_produtos))
 
-        # Estrutura exata do seu ficheiro Excel (Linha 1 de instruções)
+        # Colunas de instrução do seu modelo Excel
         colunas_instrucoes = [
             'Código do item, usado para verificação de unicidade', 'Se vincular vários grupos de itens adicionais, separe todos com vírgulas', 
             'Obrigatório', 'Opcional', 'Obrigatório.1', 'Insira a URL da imagem', 'Se o item tiver apenas um tamanho, deixe em branco por padrão', 
@@ -50,7 +51,7 @@ def extrair_cardapio(url: str):
             'Insira 0 se não houver limite, ou 1 se houver limite.9', 'Insira 0 se não houver limite, ou 1 se houver limite.10', 'Unnamed: 21'
         ]
 
-        # Linha 2 com os verdadeiros nomes das colunas
+        # Cabeçalhos reais do modelo
         linha_cabecalhos = [
             '*Código', '\t\nID do grupo de itens adicionais vinculados', '*Nome do item', 'Descrição do item', 
             '*Categoria do item', 'Link da imagem do item', 'Nome do tamanho', '*Preço de venda', 
@@ -63,18 +64,20 @@ def extrair_cardapio(url: str):
 
         dados = [linha_cabecalhos]
 
-        # Preenche os produtos extraídos no formato exigido
         for i, nome in enumerate(nomes_produtos):
             linha = [""] * 22
-            linha[0] = str(i + 1)                 # *Código
-            linha[2] = nome                       # *Nome do item
-            linha[4] = "Extraído do Site"         # *Categoria do item
-            linha[7] = 0                          # *Preço (0 por defeito, ajustar manualmente depois)
-            linha[8] = 1                          # WhatsApp = 1
-            linha[9] = 1                          # Escanear = 1
+            linha[0] = str(i + 1)                 
+            linha[2] = nome                       
+            linha[4] = "Extraído"                 
+            linha[7] = 0                          
+            linha[8] = 1                          
+            linha[9] = 1                          
             dados.append(linha)
 
-        # Cria o DataFrame e o ficheiro Excel em memória
+        # Retorna erro claro se o Cloudscraper também for bloqueado
+        if len(nomes_produtos) == 0:
+            return {"erro": "O site bloqueou a extração (Anti-Bot Ativo) ou não foram encontrados produtos."}
+
         df = pd.DataFrame(dados, columns=colunas_instrucoes)
         
         output = io.BytesIO()
@@ -82,7 +85,6 @@ def extrair_cardapio(url: str):
             df.to_excel(writer, sheet_name='Item Regular', index=False)
         output.seek(0)
         
-        # Devolve o ficheiro .xlsx
         return Response(
             content=output.getvalue(),
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
