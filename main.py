@@ -1,13 +1,14 @@
 from fastapi import FastAPI
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from playwright.async_api import async_playwright
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
 import io
 
 app = FastAPI()
 
-# Permite que o Google Sites converse com este servidor
+# Permite a comunicação com o Google Sites
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,45 +18,39 @@ app.add_middleware(
 )
 
 @app.get("/extrair")
-async def extrair_cardapio(url: str):
-    itens_extraidos = []
-    
-    async with async_playwright() as p:
-        # Abre um navegador invisível
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+def extrair_cardapio(url: str):
+    try:
+        # Finge ser um navegador normal para evitar bloqueios simples
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
         
-        try:
-            # Acessa o site que o usuário digitou
-            await page.goto(url, timeout=60000)
-            
-            # Aqui o robô rola a página para carregar itens dinâmicos
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(3000) # Espera 3 segundos
-            
-            # ATENÇÃO: Esta é uma extração genérica. 
-            # Puxa todos os textos que parecem títulos (h2, h3)
-            # Para um sistema perfeito, futuramente você integraria IA aqui.
-            titulos = await page.query_selector_all('h2, h3')
-            
-            for titulo in titulos:
-                texto = await titulo.inner_text()
-                if texto.strip():
-                    itens_extraidos.append({"Item Encontrado": texto.strip()})
-                    
-        except Exception as e:
-            return {"erro": str(e)}
-        finally:
-            await browser.close()
+        # Acede ao site
+        resposta = requests.get(url, headers=headers, timeout=30)
+        
+        # Lê o HTML da página
+        soup = BeautifulSoup(resposta.text, 'html.parser')
+        
+        itens_extraidos = []
+        
+        # Procura por textos que pareçam títulos de produtos (h2, h3, h4)
+        titulos = soup.find_all(['h2', 'h3', 'h4'])
+        
+        for titulo in titulos:
+            texto = titulo.get_text(strip=True)
+            if texto:
+                itens_extraidos.append({"Item Encontrado": texto})
 
-    # Cria a planilha (CSV)
-    df = pd.DataFrame(itens_extraidos)
-    stream = io.StringIO()
-    df.to_csv(stream, index=False)
-    
-    # Devolve o arquivo para download
-    return Response(
-        content=stream.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=cardapio_extraido.csv"}
-    )
+        # Cria o ficheiro CSV
+        df = pd.DataFrame(itens_extraidos)
+        stream = io.StringIO()
+        df.to_csv(stream, index=False)
+        
+        # Envia o ficheiro para download
+        return Response(
+            content=stream.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=cardapio.csv"}
+        )
+    except Exception as e:
+        return {"erro": str(e)}
